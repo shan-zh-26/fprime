@@ -35,9 +35,9 @@ TEST(AosDeframer, testInvalidFrameLength) {
     tester.testInvalidFrameLength();
 }
 
-TEST(AosDeframer, testInvalidCrc) {
+TEST(AosDeframer, testInvalidFecf) {
     Svc::Ccsds::AosDeframerTester tester;
-    tester.testInvalidCrc();
+    tester.testInvalidFecf();
 }
 
 TEST(AosDeframer, testInvalidTfvn) {
@@ -45,19 +45,16 @@ TEST(AosDeframer, testInvalidTfvn) {
     tester.testInvalidTfvn();
 }
 
-TEST(AosDeframer, testAcceptAllVcid) {
+TEST(AosDeframer, testVcFrameCountGap) {
     Svc::Ccsds::AosDeframerTester tester;
-    tester.testAcceptAllVcid();
+    tester.testVcFrameCountGap();
 }
+
+// testAcceptAllVcid removed: accept-all-VCID mode is not supported.
 
 // ----------------------------------------------------------------------
 // Tests - M_PDU Processing
 // ----------------------------------------------------------------------
-
-TEST(AosDeframer, testFhpAtZero) {
-    Svc::Ccsds::AosDeframerTester tester;
-    tester.testFhpAtZero();
-}
 
 TEST(AosDeframer, testFhpAtOffset) {
     Svc::Ccsds::AosDeframerTester tester;
@@ -88,9 +85,9 @@ TEST(AosDeframer, testSpanningPacketTwoFrames) {
     tester.testSpanningPacketTwoFrames();
 }
 
-TEST(AosDeframer, testSpanningPacketMultipleFrames) {
+TEST(AosDeframer, testSpanningPacketFourFrames) {
     Svc::Ccsds::AosDeframerTester tester;
-    tester.testSpanningPacketMultipleFrames();
+    tester.testSpanningPacketFourFrames();
 }
 
 TEST(AosDeframer, testSpanningPacketContinuation) {
@@ -98,23 +95,48 @@ TEST(AosDeframer, testSpanningPacketContinuation) {
     tester.testSpanningPacketContinuation();
 }
 
+TEST(AosDeframer, testSpanningPacketAllocFailureEvent) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testSpanningPacketAllocFailureEvent();
+}
+
+TEST(AosDeframer, testSpanningPacketAbandonedOnVcGap) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testSpanningPacketAbandonedOnVcGap();
+}
+
+TEST(AosDeframer, testSpanningPacketAbandonedOnIdleFrame) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testSpanningPacketAbandonedOnIdleFrame();
+}
+
+TEST(AosDeframer, testSpanningPacketAbandonedOnPrematureFhp) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testSpanningPacketAbandonedOnPrematureFhp();
+}
+
+TEST(AosDeframer, testSppHeaderSpansFrame) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testSppHeaderSpansFrame();
+}
+
+TEST(AosDeframer, testEppHeaderSpansFrame) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testEppHeaderSpansFrame();
+}
+
+TEST(AosDeframer, testAllocFailureNextPacketExtracted) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testAllocFailureNextPacketExtracted();
+}
+
 // ----------------------------------------------------------------------
 // Tests - SPP Extraction
 // ----------------------------------------------------------------------
 
-TEST(AosDeframer, testSppExtraction) {
-    Svc::Ccsds::AosDeframerTester tester;
-    tester.testSppExtraction();
-}
-
 TEST(AosDeframer, testSppIdlePacketFiltering) {
     Svc::Ccsds::AosDeframerTester tester;
     tester.testSppIdlePacketFiltering();
-}
-
-TEST(AosDeframer, testSppSequenceCount) {
-    Svc::Ccsds::AosDeframerTester tester;
-    tester.testSppSequenceCount();
 }
 
 // ----------------------------------------------------------------------
@@ -124,6 +146,11 @@ TEST(AosDeframer, testSppSequenceCount) {
 TEST(AosDeframer, testEppExtraction) {
     Svc::Ccsds::AosDeframerTester tester;
     tester.testEppExtraction();
+}
+
+TEST(AosDeframer, testEppLengthOfLength) {
+    Svc::Ccsds::AosDeframerTester tester;
+    tester.testEppLengthOfLength();
 }
 
 TEST(AosDeframer, testEppIdlePacket) {
@@ -136,9 +163,9 @@ TEST(AosDeframer, testEppFillPacket) {
     tester.testEppFillPacket();
 }
 
-TEST(AosDeframer, testInvalidEppVersion) {
+TEST(AosDeframer, testInvalidPvnVersion) {
     Svc::Ccsds::AosDeframerTester tester;
-    tester.testInvalidEppVersion();
+    tester.testInvalidPvnVersion();
 }
 
 // ----------------------------------------------------------------------
@@ -167,16 +194,6 @@ TEST(AosDeframer, testPvnMaskEppOnly) {
 TEST(AosDeframer, testFrameCountTelemetry) {
     Svc::Ccsds::AosDeframerTester tester;
     tester.testFrameCountTelemetry();
-}
-
-TEST(AosDeframer, testPacketCountTelemetry) {
-    Svc::Ccsds::AosDeframerTester tester;
-    tester.testPacketCountTelemetry();
-}
-
-TEST(AosDeframer, testCrcErrorCountTelemetry) {
-    Svc::Ccsds::AosDeframerTester tester;
-    tester.testCrcErrorCountTelemetry();
 }
 
 int main(int argc, char** argv) {

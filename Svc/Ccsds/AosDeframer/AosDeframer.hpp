@@ -14,18 +14,18 @@
 #define Svc_Ccsds_AosDeframer_HPP
 
 #include "Svc/Ccsds/AosDeframer/AosDeframerComponentAc.hpp"
+#include "Svc/Ccsds/AosDeframer/FppConstantsAc.hpp"
 #include "Svc/Ccsds/Types/AOSHeaderSerializableAc.hpp"
 #include "Svc/Ccsds/Types/AOSTrailerSerializableAc.hpp"
 #include "Svc/Ccsds/Types/FppConstantsAc.hpp"
 #include "Svc/Ccsds/Types/M_PDUHeaderSerializableAc.hpp"
 #include "Svc/Ccsds/Types/TfvnEnumAc.hpp"
+#include "config/PvnEnumAc.hpp"
 
 namespace Svc {
 namespace Ccsds {
 
 class AosDeframer : public AosDeframerComponentBase {
-    friend class AosDeframerTester;
-
   public:
     // ----------------------------------------------------------------------
     // Component construction and destruction
@@ -47,17 +47,18 @@ class AosDeframer : public AosDeframerComponentBase {
     //! \param frameErrorControlField Whether FECF is present (per Section 4.1.6)
     //! \param spacecraftId The spacecraft ID to accept (10 bits, per Section 4.1.2.2)
     //! \param vcId The virtual channel ID to accept (6 bits, per Section 4.1.2.3)
-    //! \param acceptAllVcid If true, accept frames from all virtual channels
-    //! \param pvnMask Bitmask of Packet Version Numbers to extract (SPP=0x1, EPP=0x8)
+    //! \param pvnMask Bitmask of Packet Version Numbers to extract (SPP=0x01, EPP=0x80)
     //!
     void configure(U32 fixedFrameSize,
                    bool frameErrorControlField,
                    U16 spacecraftId = ComCfg::SpacecraftId,
                    U8 vcId = 0,
-                   bool acceptAllVcid = true,
                    U8 pvnMask = PvnBitfield::SPP_MASK | PvnBitfield::EPP_MASK);
 
   private:
+    // Forward declaration for helper method signatures that reference the nested VC state type
+    struct AosDeframerVc;
+
     // ----------------------------------------------------------------------
     // Handler implementations for user-defined typed input ports
     // ----------------------------------------------------------------------
@@ -66,6 +67,8 @@ class AosDeframer : public AosDeframerComponentBase {
     //!
     //! Port to receive framed AOS data. This is essentially the CCSDS AOS
     //! VC_RECEIVE.indication Service Primitive (per Section 3.4.3.2)
+    //! Note: parseAndValidateHeader handles warning events and errorNotify for
+    //!       header failures; this function is responsible for data return.
     void dataIn_handler(FwIndexType portNum,  //!< The port number
                         Fw::Buffer& data,
                         const ComCfg::FrameContext& context) override;
@@ -81,77 +84,107 @@ class AosDeframer : public AosDeframerComponentBase {
     // Private helper methods
     // ----------------------------------------------------------------------
 
-    //! Helper method to send an error notification if the errorNotify port is connected
-    //! \param error The error to send
-    void errorNotifyHelper(Svc::Ccsds::FrameError error);
-
     //! Parse the AOS Primary Header per CCSDS 732.0-B-5 Section 4.1.2
     //! \param data The frame buffer
     //! \param context The frame context to update
-    //! \return true if header is valid, false otherwise
-    bool parseAndValidateHeader(Fw::Buffer& data, ComCfg::FrameContext& context);
+    //! \return pointer to the vc struct if header is valid, nullptr otherwise
+    AosDeframerVc* parseAndValidateHeader(Fw::Buffer& data, ComCfg::FrameContext& context);
 
     //! Validate the Frame Error Control Field (CRC) per CCSDS 732.0-B-5 Section 4.1.6
+    //! Increments the global m_crcErrorCount on failure (FECF is a physical-channel concern).
     //! \param data The frame buffer
-    //! \return true if CRC is valid, false otherwise
+    //! \return true if FECF is valid, false otherwise
     bool validateFecf(Fw::Buffer& data);
 
+    //! Emit an errorNotify port message if the port is connected
+    void notifyErrorIfConnected(Ccsds::FrameError error);
+
+    //! Abandon an in-progress spanning packet, deallocating backing storage if needed
+    void abandonSpanningPacket(AosDeframerVc& vc);
+
     //! Parse the M_PDU header and extract packets per CCSDS 732.0-B-5 Section 4.1.4.2
+    //! \param vc The virtual channel state
     //! \param data The frame buffer (positioned after AOS primary header)
-    //! \param context The frame context
-    void extractPackets(Fw::Buffer& data, ComCfg::FrameContext& context);
+    void extractPackets(AosDeframerVc& vc, Fw::Buffer& data);
 
-    //! Extract a Space Packet from the M_PDU data zone per CCSDS 133.0-B-2
-    //! \param payloadStart Pointer to start of packet data
-    //! \param payloadSize Available bytes in the data zone
-    //! \param context The frame context
-    //! \return Number of bytes consumed (packet size), or 0 if incomplete
-    FwSizeType extractSppPacket(U8* payloadStart, FwSizeType payloadSize, ComCfg::FrameContext& context);
+    //! Determine the validity and size, and idle status of a packet
+    //! \param vc The virtual channel state
+    //! \param packetStart Pointer to start of packet data within the incoming frame buffer
+    //! \param remainingBytes Available bytes in the data zone
+    //! \return Number of bytes the packet spans, or 0 if not yet known/idle
+    FwSizeType sizePacket(AosDeframerVc& vc, U8* packetStart, FwSizeType remainingBytes);
 
-    //! Extract an Encapsulation Packet from the M_PDU data zone per CCSDS 133.1-B-3
-    //! \param payloadStart Pointer to start of packet data
+    //! Attempt to parse a Space Packet header from the M_PDU data zone per CCSDS 133.0-B-2
+    //! \param payloadStart Pointer to start of packet data within the incoming frame buffer
     //! \param payloadSize Available bytes in the data zone
-    //! \param context The frame context
-    //! \return Number of bytes consumed (packet size), or 0 if incomplete/invalid
-    FwSizeType extractEppPacket(U8* payloadStart, FwSizeType payloadSize, ComCfg::FrameContext& context);
+    //! \return Number of bytes the packet spans, or 0 not yet known
+    FwSizeType sizeSppPacket(U8* payloadStart, FwSizeType payloadSize);
+
+    //! Attempt to parse an Encapsulation Packet header from the M_PDU data zone per CCSDS 133.1-B-3
+    //! \param payloadStart Pointer to start of packet data within the incoming frame buffer
+    //! \param payloadSize Available bytes in the data zone
+    //! \return Number of bytes the packet spans, or 0 not yet known
+    FwSizeType sizeEppPacket(const U8* const payloadStart, FwSizeType payloadSize);
 
     //! Determine packet type from first byte (PVN field)
     //! \param firstByte First byte of packet
     //! \return Packet Version Number (0 for SPP, 7 for EPP)
     static U8 getPacketVersion(U8 firstByte);
 
-    //! Check if a packet type is enabled in the PVN mask
-    //! \param pvn Packet Version Number
-    //! \return true if packet type should be extracted
-    bool isPacketTypeEnabled(U8 pvn) const;
+    //! Append data to the active spanning packet buffer, completing it if possible
+    //! \param vc The virtual channel state
+    //! \param data Pointer to data bytes to append
+    //! \param size Number of bytes to append
+    //! \return Number of bytes to seek forward, or zero if done w/ frame
+    FwSizeType appendToSpanningPacket(AosDeframerVc& vc, U8* data, FwSizeType size);
+
+    //! Map frame context onto the appropriate virtual channel struct
+    //! \param vcId the virtual channel id to lookup
+    //! \return pointer to the vc struct if vcId is known, nullptr otherwise
+    //! TODO: Implement multi-VC support; currently always returns &m_vcs[0] or nullptr
+    AosDeframerVc* getVcStruct(const U8 vcId);
+
+    //! Per-virtual-channel state, mirroring the AosFramer::AosVc pattern for future multi-VC support
+    struct AosDeframerVc {
+        U8 vcStructIndex = 0xFF;                                     //!< Index into VC array for this vc struct
+        U8 virtualChannelId = 0;                                     //!< VCID for this virtual channel
+        U8 pvnMask = PvnBitfield::SPP_MASK | PvnBitfield::EPP_MASK;  //!< Bitmask of enabled PVNs
+
+        // Telemetry counters (per-VC)
+        U32 framesProcessed = 0;   //!< Total frames received on this VC
+        U32 packetsExtracted = 0;  //!< Total packets extracted from this VC
+        U32 vcFrameCount = 0;      //!< Last received virtual channel frame count from header
+
+        // Spanning packet state (for packets that span multiple frames)
+        // Per CCSDS 732.0-B-5 Section 4.1.4.2.2.3
+        struct SpanningPacketState {
+            static constexpr FwSizeType HEADER_BUF_SIZE =
+                8;  //!< Max header bytes needed to determine size (8 bytes is largest EPP Header)
+            U8 headerBuf[HEADER_BUF_SIZE];  //!< Header bytes accumulated before allocation
+
+            Fw::Buffer buffer;  //!< Dynamically-allocated packet buffer
+
+            FwSizeType bytesReceived = 0;  //!< Bytes received so far
+            // Context to be sent w/ the spanning packet
+            ComCfg::FrameContext context;
+        } spanningPacket;
+    };
 
   private:
     // ----------------------------------------------------------------------
     // Member variables
     // ----------------------------------------------------------------------
 
-    // Configuration parameters (set via configure())
-    U32 m_fixedFrameSize;                //!< Fixed frame size in bytes
-    bool m_fecfEnabled;                  //!< Whether FECF is enabled
-    U16 m_spacecraftId;                  //!< Expected spacecraft ID (10 bits)
-    U8 m_vcId;                           //!< Expected virtual channel ID (6 bits)
-    bool m_acceptAllVcid;                //!< Accept frames from all VCIDs
-    U8 m_pvnMask;                        //!< Bitmask of enabled PVNs
+    // Frame-level configuration parameters (set via configure())
+    U32 m_fixedFrameSize = 0;   //!< Fixed frame size in bytes
+    bool m_fecfEnabled = true;  //!< Whether FECF is enabled
+    U16 m_spacecraftId = 0;     //!< Expected spacecraft ID (10 bits)
 
-    // Telemetry counters
-    U32 m_frameCount;                    //!< Total frames received
-    U32 m_packetCount;                   //!< Total packets extracted
-    U32 m_crcErrorCount;                 //!< Total CRC errors
+    //! FECF CRC error counter - per physical channel (not per-VC)
+    U32 m_crcErrorCount = 0;
 
-    // Spanning packet state (for packets that span multiple frames)
-    // Per CCSDS 732.0-B-5 Section 4.1.4.2.2.3
-    struct SpanningPacketState {
-        U8 buffer[ComCfg::AosMaxFrameFixedSize];  //!< Buffer for partial packet
-        FwSizeType bytesReceived;                  //!< Bytes received so far
-        FwSizeType expectedSize;                   //!< Expected total packet size (0 if unknown)
-        U8 pvn;                                    //!< Packet Version Number
-        bool active;                               //!< Whether a spanning packet is in progress
-    } m_spanningPacket;
+    //! TODO: Multi VC | Implement multiple VCs - currently always returns &m_vcs[0]
+    AosDeframerVc m_vcs[AosDeframer_NumVcs];  //!< Our one AOS Virtual Channel (for now)
 };
 
 }  // namespace Ccsds

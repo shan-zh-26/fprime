@@ -9,6 +9,8 @@
 
 #include "Svc/Ccsds/AosDeframer/AosDeframer.hpp"
 #include "Svc/Ccsds/AosDeframer/AosDeframerGTestBase.hpp"
+#include "Svc/Ccsds/Types/EppLengthOfLengthEnumAc.hpp"
+#include "Svc/Ccsds/Types/EppProtocolIdEnumAc.hpp"
 
 namespace Svc {
 
@@ -29,6 +31,11 @@ class AosDeframerTester final : public AosDeframerGTestBase {
     // Test frame sizes
     static const U32 TEST_FRAME_SIZE = 256;
     static const U32 TEST_FRAME_SIZE_LARGE = 1024;
+    static const FwSizeType ALLOC_BUF_SIZE = 65536;
+
+    // Data zone size within TEST_FRAME_SIZE frames (header + M_PDU header + FECF trailer)
+    static const FwSizeType TEST_DATA_ZONE_SIZE =
+        TEST_FRAME_SIZE - AOSHeader::SERIALIZED_SIZE - M_PDUHeader::SERIALIZED_SIZE - AOSTrailer::SERIALIZED_SIZE;
 
   public:
     // ----------------------------------------------------------------------
@@ -61,21 +68,21 @@ class AosDeframerTester final : public AosDeframerGTestBase {
     //! Test invalid frame length handling
     void testInvalidFrameLength();
 
-    //! Test invalid CRC handling
-    void testInvalidCrc();
+    //! Test invalid FECF (CRC) handling
+    void testInvalidFecf();
 
     //! Test invalid transfer frame version number
     void testInvalidTfvn();
 
-    //! Test accept all VCID mode
-    void testAcceptAllVcid();
+    //! Test VC frame count gap detection emits event + errorNotify
+    void testVcFrameCountGap();
+
+    // Accept-all-VCID is not supported: each VC struct maps to exactly one VCID,
+    // enabling per-packet spanning state tracking.
 
     // ----------------------------------------------------------------------
     // Tests - M_PDU Processing
     // ----------------------------------------------------------------------
-
-    //! Test First Header Pointer at offset 0
-    void testFhpAtZero();
 
     //! Test First Header Pointer at non-zero offset
     void testFhpAtOffset();
@@ -96,24 +103,39 @@ class AosDeframerTester final : public AosDeframerGTestBase {
     //! Test packet spanning across two frames
     void testSpanningPacketTwoFrames();
 
-    //! Test packet spanning across multiple frames
-    void testSpanningPacketMultipleFrames();
+    //! Test packet spanning across four frames (explicit 3+ frame coverage)
+    void testSpanningPacketFourFrames();
 
     //! Test spanning packet with continuation frame
     void testSpanningPacketContinuation();
+
+    //! Test spanning packet allocation failure emits an event and drops the packet
+    void testSpanningPacketAllocFailureEvent();
+
+    //! Test spanning packet dropped when a VC frame count gap is detected mid-reassembly
+    void testSpanningPacketAbandonedOnVcGap();
+
+    //! Test spanning packet dropped when an idle frame arrives mid-reassembly
+    void testSpanningPacketAbandonedOnIdleFrame();
+
+    //! Test spanning packet silently dropped when FHP arrives before the packet's expected end
+    void testSpanningPacketAbandonedOnPrematureFhp();
+
+    //! Test SPP packet whose header is split across a frame boundary
+    void testSppHeaderSpansFrame();
+
+    //! Test EPP packet whose header is split across a frame boundary
+    void testEppHeaderSpansFrame();
+
+    //! Test alloc failure for a packet that fits in one frame; next packet still extracted
+    void testAllocFailureNextPacketExtracted();
 
     // ----------------------------------------------------------------------
     // Tests - SPP Extraction
     // ----------------------------------------------------------------------
 
-    //! Test Space Packet Protocol extraction
-    void testSppExtraction();
-
     //! Test SPP idle packet filtering
     void testSppIdlePacketFiltering();
-
-    //! Test SPP with sequence count extraction
-    void testSppSequenceCount();
 
     // ----------------------------------------------------------------------
     // Tests - EPP Extraction
@@ -122,14 +144,17 @@ class AosDeframerTester final : public AosDeframerGTestBase {
     //! Test Encapsulation Packet Protocol extraction
     void testEppExtraction();
 
+    //! Test EPP extraction for all length-of-length variants (lol=1, lol=2, lol=4)
+    void testEppLengthOfLength();
+
     //! Test EPP idle packet handling
     void testEppIdlePacket();
 
     //! Test EPP fill packet handling
     void testEppFillPacket();
 
-    //! Test invalid EPP packet version
-    void testInvalidEppVersion();
+    //! Test invalid packet version
+    void testInvalidPvnVersion();
 
     // ----------------------------------------------------------------------
     // Tests - Configuration
@@ -151,11 +176,12 @@ class AosDeframerTester final : public AosDeframerGTestBase {
     //! Test frame count telemetry
     void testFrameCountTelemetry();
 
-    //! Test packet count telemetry
-    void testPacketCountTelemetry();
+  private:
+    // ----------------------------------------------------------------------
+    // From-port handlers (allocator support for spanning packets)
+    // ----------------------------------------------------------------------
 
-    //! Test CRC error count telemetry
-    void testCrcErrorCountTelemetry();
+    Fw::Buffer from_allocate_handler(FwIndexType portNum, FwSizeType size) override;
 
   private:
     // ----------------------------------------------------------------------
@@ -170,6 +196,9 @@ class AosDeframerTester final : public AosDeframerGTestBase {
 
     //! Configure the component with default test settings
     void configureDefault();
+
+    //! Assert that all emitted packet contexts carry the expected VCID
+    void assertDataOutVcId(U8 expectedVcId) const;
 
     //! Assemble an AOS frame buffer with the given parameters
     //! \param payload Pointer to M_PDU payload data
@@ -200,32 +229,11 @@ class AosDeframerTester final : public AosDeframerGTestBase {
 
     //! Create an EPP packet in the buffer
     //! \param buffer Destination buffer
-    //! \param protocolId Protocol ID
+    //! \param protocolId Protocol ID (0 = Idle per EppProtocolId::Idle)
+    //! \param lengthOfLength EPP length of length enum
     //! \param dataLength Packet data length
     //! \return Total packet size
-    FwSizeType createEppPacket(U8* buffer, U8 protocolId, U16 dataLength);
-
-    //! Create an EPP idle packet in the buffer
-    //! \param buffer Destination buffer
-    //! \param lengthOfLength Length of the length field (0 for fill packet)
-    //! \param packetLength Packet length (if lengthOfLength > 0)
-    //! \return Total packet size
-    FwSizeType createEppIdlePacket(U8* buffer, U8 lengthOfLength, FwSizeType packetLength);
-
-    //! Get the frame's TFVN from raw data
-    U8 getFrameTfvn(U8* frameData);
-
-    //! Get the frame's Spacecraft ID from raw data
-    U16 getFrameScId(U8* frameData);
-
-    //! Get the frame's Virtual Channel ID from raw data
-    U8 getFrameVcId(U8* frameData);
-
-    //! Get the frame's VC Frame Count from raw data
-    U32 getFrameVcCount(U8* frameData);
-
-    //! Get the frame's First Header Pointer from raw data
-    U16 getFrameFhp(U8* frameData);
+    FwSizeType createEppPacket(U8* buffer, U8 protocolId, EppLengthOfLength lengthOfLength, FwSizeType dataLength);
 
   private:
     // ----------------------------------------------------------------------
@@ -238,8 +246,11 @@ class AosDeframerTester final : public AosDeframerGTestBase {
     //! Data buffer used to produce test frames
     U8 m_frameData[ComCfg::AosMaxFrameFixedSize];
 
-    //! Secondary frame buffer for multi-frame tests
-    U8 m_frameData2[ComCfg::AosMaxFrameFixedSize];
+    //! Static backing storage returned by the allocate port in unit tests
+    U8 m_allocBuf[ALLOC_BUF_SIZE];
+
+    //! When true, the next allocate call returns an invalid buffer (simulates alloc failure)
+    bool m_failNextAlloc = false;
 };
 
 }  // namespace Ccsds
