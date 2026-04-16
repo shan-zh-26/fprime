@@ -42,7 +42,7 @@ class AosFramer final : public AosFramerComponentBase {
 
     struct AosVc {
         U8 vc_struct_index = 0xFF;  //!< Index into VC Array for this vc struct
-        U8 virtualChannelId = 1;    //!< VCID for this particular virtual channel
+        U8 virtualChannelId = 0;    //!< VCID for this particular virtual channel
         // Current implementation uses a single virtual channel, so we can use a single virtual frame count
         U32 virtualFrameCount = 0;  //!< Virtual Frame Count - 24 bits - wraps around at 16,777,216
 
@@ -90,6 +90,7 @@ class AosFramer final : public AosFramerComponentBase {
     //!
     void configure(U32 fixedFixedSize,                  //!< Number of bytes in each AOS SDL Frame
                    bool frameErrorControlField,         //!< Whether to enable the frame error control field
+		   U16 spacecraftId = ComCfg::SpacecraftId,
                    U8 idlePvns = PvnBitfield::SPP_MASK  //!< Bitfield of which Packet Version Numbers to use
                                                         //!< for idle packets
                                                         //!< Default to SPP
@@ -171,6 +172,7 @@ class AosFramer final : public AosFramerComponentBase {
   private:
     // Config Parameters
     bool m_fecf = true;  //!< AOS Frame Error Control Field presence
+    U16 m_spacecraftId = 0;     //!< Expected spacecraft ID (10 bits)
 
     AosVc m_vcs[1];  //! Our one AOS Virtual Channel (for now)
 };
